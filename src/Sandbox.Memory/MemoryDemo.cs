@@ -28,7 +28,7 @@ public static class MemoryDemo
 {
     public static void Run()
     {
-        Console.WriteLine("--- Struct (значимый тип) ---");
+        Console.WriteLine("Struct (значимый тип):");
         CommitRecordStruct s = new CommitRecordStruct("a1b2c3", 3);
         Console.WriteLine($"Старт:                  {s.Hash}, файлов: {s.FilesCount}");
 
@@ -45,7 +45,7 @@ public static class MemoryDemo
         Console.WriteLine($"После ReplaceRef:       {s.Hash}, файлов: {s.FilesCount}");
 
         Console.WriteLine();
-        Console.WriteLine("--- Class (ссылочный тип) ---");
+        Console.WriteLine("Class (ссылочный тип):");
         CommitRecordClass c = new CommitRecordClass("a1b2c3", 3);
         Console.WriteLine($"Старт:                  {c.Hash}, файлов: {c.FilesCount}");
 

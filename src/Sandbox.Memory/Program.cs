@@ -3,7 +3,7 @@
 MemoryDemo.Run();
 
 Console.WriteLine();
-Console.WriteLine("--- Проверка парсера ---");
+Console.WriteLine("Проверка парсера:");
 
 string[] urls =
 {
@@ -28,7 +28,7 @@ foreach (string url in urls)
 }
 
 Console.WriteLine();
-Console.WriteLine("--- Замер аллокаций (10 000 итераций) ---");
+Console.WriteLine("Замер аллокаций (10 000 итераций):");
 
 string testUrl = "https://gitlab.com/group/subgroup/project.git/";
 int iterations = 10_000;
