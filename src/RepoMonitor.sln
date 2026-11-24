@@ -5,6 +5,10 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sandbox.Memory", "Sandbox.Memory\Sandbox.Memory.csproj", "{FA7BB1EB-C81B-4B3D-B743-CE27EA6B0E68}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RepoMonitor.Core", "RepoMonitor.Core\RepoMonitor.Core.csproj", "{39AB9645-4AE8-4319-B669-A433F6D520BA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RepoMonitor.Cli", "RepoMonitor.Cli\RepoMonitor.Cli.csproj", "{E8D9E05D-ECAB-4C71-BC0D-8E0CD99BB938}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +22,13 @@ Global
 		{FA7BB1EB-C81B-4B3D-B743-CE27EA6B0E68}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FA7BB1EB-C81B-4B3D-B743-CE27EA6B0E68}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FA7BB1EB-C81B-4B3D-B743-CE27EA6B0E68}.Release|Any CPU.Build.0 = Release|Any CPU
+		{39AB9645-4AE8-4319-B669-A433F6D520BA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{39AB9645-4AE8-4319-B669-A433F6D520BA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{39AB9645-4AE8-4319-B669-A433F6D520BA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{39AB9645-4AE8-4319-B669-A433F6D520BA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E8D9E05D-ECAB-4C71-BC0D-8E0CD99BB938}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E8D9E05D-ECAB-4C71-BC0D-8E0CD99BB938}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E8D9E05D-ECAB-4C71-BC0D-8E0CD99BB938}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E8D9E05D-ECAB-4C71-BC0D-8E0CD99BB938}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
