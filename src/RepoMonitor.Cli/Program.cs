@@ -1,53 +1,51 @@
-﻿using RepoMonitor.Cli;
-using RepoMonitor.Core.Abstractions;
-using RepoMonitor.Core.Collections;
+﻿using RepoMonitor.Core.Clients;
+using RepoMonitor.Core.Http;
 using RepoMonitor.Core.Models;
 using RepoMonitor.Core.Services;
 
-Console.WriteLine("Кольцевой буфер (емкость 4):");
-var ring = new BoundedRingBuffer<int>(4);
-for (int i = 1; i <= 6; i++)
-{
-    ring.Add(i);
-    Console.WriteLine($"Добавил {i}: {string.Join(", ", ring)} (всего {ring.Count})");
-}
+using HttpClient httpClient = new HttpClient();
+ETagCache cache = new ETagCache();
+ConditionalHttpClient conditionalHttp = new ConditionalHttpClient(httpClient, cache);
+GitHubPlatformClient client = new GitHubPlatformClient(conditionalHttp);
+ActivityAggregator aggregator = new ActivityAggregator(50);
 
-Console.WriteLine();
-Console.WriteLine("Проверка агрегатора:");
-
-IGitPlatformClient client = new MockGitPlatformClient();
-var aggregator = new ActivityAggregator(50);
-
-var source = new SourceConfig
+SourceConfig source = new SourceConfig
 {
     Platform = GitPlatform.GitHub,
-    Mode = MonitoringMode.AccountRepositories,
+    Mode = MonitoringMode.PublicRepository,
     BaseUrl = "https://api.github.com",
-    DisplayName = "Test GitHub"
+    RepositoryPath = "https://github.com/microsoft/calculator",
+    DisplayName = "Calculator"
 };
 
-var repos = await client.GetRepositoriesAsync(source);
+IReadOnlyList<TrackedRepository> repos = await client.GetRepositoriesAsync(source);
+TrackedRepository repo = repos[0];
 
-int firstCount = 0;
-foreach (var repo in repos)
-{
-    var items = await client.GetActivitiesAsync(source, repo);
-    firstCount += aggregator.AddRange(items).Count;
-}
-
-int secondCount = 0;
-foreach (var repo in repos)
-{
-    var items = await client.GetActivitiesAsync(source, repo);
-    secondCount += aggregator.AddRange(items).Count;
-}
-
-Console.WriteLine($"Первый опрос, новых: {firstCount}");
-Console.WriteLine($"Повторный опрос, новых: {secondCount}");
+Console.WriteLine($"Репозиторий: {repo.FullName}, статус: {repo.Status}");
 Console.WriteLine();
-Console.WriteLine("События:");
 
-foreach (var item in aggregator.GetAllSorted())
+for (int pass = 1; pass <= 2; pass++)
 {
-    Console.WriteLine($"{item.Timestamp:HH:mm} {item.Platform} {item.RepositoryShortName} {item.Type} {item.ExternalId} {item.Author}: {item.Title}");
+    Console.WriteLine($"Опрос {pass}:");
+    IReadOnlyList<ActivityItem> items = await client.GetActivitiesAsync(source, repo);
+    IReadOnlyList<ActivityItem> added = aggregator.AddRange(items);
+
+    foreach (HttpResponseInfo resp in client.LastResponses)
+    {
+        Console.WriteLine($"URL: {resp.Url}");
+        Console.WriteLine($"Status: {(int)resp.StatusCode} {resp.StatusCode}");
+        Console.WriteLine($"If-None-Match: {resp.SentETag ?? "none"}");
+        Console.WriteLine($"ETag: {resp.ReceivedETag ?? "none"}");
+        Console.WriteLine($"X-RateLimit-Remaining: {resp.RateLimitRemaining}");
+        Console.WriteLine();
+    }
+
+    Console.WriteLine($"Новых событий: {added.Count}");
+    Console.WriteLine();
+}
+
+Console.WriteLine("Последние события:");
+foreach (ActivityItem item in aggregator.GetAllSorted().Take(10))
+{
+    Console.WriteLine($"{item.Timestamp:dd.MM HH:mm} {item.Platform} {item.RepositoryShortName} {item.Type} {item.ExternalId} {item.Author}: {item.Title}");
 }
