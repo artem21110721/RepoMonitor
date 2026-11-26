@@ -18,46 +18,133 @@ public class GitHubPlatformClient : IGitPlatformClient
         _httpClient = httpClient;
     }
 
-    public async Task<IReadOnlyList<TrackedRepository>> GetRepositoriesAsync(
+    public async Task<PollResult<IReadOnlyList<TrackedRepository>>> GetRepositoriesAsync(
         SourceConfig source,
         CancellationToken cancellationToken = default)
     {
-        string fullName = NormalizeRepoPath(source.RepositoryPath);
-        string shortName = fullName.Contains('/') ? fullName.Split('/').Last() : fullName;
         string baseUrl = GetBaseUrl(source.BaseUrl);
+        Dictionary<string, string> headers = BuildHeaders(source);
+
+        if (source.Mode == MonitoringMode.AccountRepositories)
+        {
+            if (string.IsNullOrWhiteSpace(source.AccessToken))
+            {
+                return PollResult<IReadOnlyList<TrackedRepository>>.Fail(
+                    RepositoryStatus.Unauthorized,
+                    "Access token is required");
+            }
+
+            string userReposUrl = $"{baseUrl}/user/repos?sort=updated&per_page=50";
+            HttpResponseInfo listResp = await _httpClient.GetAsync(userReposUrl, headers, cancellationToken);
+            if (listResp.IsError)
+            {
+                return PollResult<IReadOnlyList<TrackedRepository>>.Fail(
+                    listResp.GetStatus(),
+                    listResp.GetErrorMessage(),
+                    listResp.RateLimitRemaining,
+                    listResp.RateLimitReset);
+            }
+
+            List<TrackedRepository> repos = new();
+            if (!listResp.IsNotModified && !string.IsNullOrEmpty(listResp.Body))
+            {
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(listResp.Body);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (JsonElement el in doc.RootElement.EnumerateArray())
+                        {
+                            string fullName = el.TryGetProperty("full_name", out JsonElement fnEl) ? fnEl.GetString() ?? string.Empty : string.Empty;
+                            string shortName = el.TryGetProperty("name", out JsonElement nEl) ? nEl.GetString() ?? fullName : fullName;
+                            if (string.IsNullOrEmpty(fullName))
+                            {
+                                continue;
+                            }
+
+                            TrackedRepository item = new TrackedRepository
+                            {
+                                Id = $"github:{fullName}",
+                                SourceId = source.Id,
+                                Platform = GitPlatform.GitHub,
+                                BaseUrl = baseUrl,
+                                FullName = fullName,
+                                ShortName = shortName,
+                                Status = RepositoryStatus.Active
+                            };
+                            ApplyMeta(item, listResp);
+                            repos.Add(item);
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    return PollResult<IReadOnlyList<TrackedRepository>>.Fail(RepositoryStatus.NetworkError, ex.Message);
+                }
+            }
+
+            return PollResult<IReadOnlyList<TrackedRepository>>.Ok(
+                repos,
+                listResp.IsNotModified,
+                listResp.RateLimitRemaining,
+                listResp.RateLimitReset);
+        }
+
+        string repoPath = NormalizeRepoPath(source.RepositoryPath);
+        string repoShort = repoPath.Contains('/') ? repoPath.Split('/').Last() : repoPath;
 
         TrackedRepository repo = new TrackedRepository
         {
-            Id = $"github:{fullName}",
+            Id = $"github:{repoPath}",
             SourceId = source.Id,
             Platform = GitPlatform.GitHub,
             BaseUrl = baseUrl,
-            FullName = fullName,
-            ShortName = shortName,
+            FullName = repoPath,
+            ShortName = repoShort,
             Status = RepositoryStatus.Active
         };
 
-        string url = $"{baseUrl}/repos/{fullName}";
-        HttpResponseInfo response = await _httpClient.GetAsync(url, cancellationToken);
-        ApplyResponseMeta(repo, response);
+        string url = $"{baseUrl}/repos/{repoPath}";
+        HttpResponseInfo response = await _httpClient.GetAsync(url, headers, cancellationToken);
+        ApplyMeta(repo, response);
 
-        if (response.StatusCode == HttpStatusCode.OK && !string.IsNullOrEmpty(response.Body))
+        if (response.IsError)
         {
-            using JsonDocument doc = JsonDocument.Parse(response.Body);
-            if (doc.RootElement.TryGetProperty("full_name", out JsonElement fullNameEl))
+            return PollResult<IReadOnlyList<TrackedRepository>>.Fail(
+                repo.Status,
+                repo.StatusMessage ?? "Request failed",
+                response.RateLimitRemaining,
+                response.RateLimitReset);
+        }
+
+        if (!response.IsNotModified && !string.IsNullOrEmpty(response.Body))
+        {
+            try
             {
-                repo.FullName = fullNameEl.GetString() ?? repo.FullName;
+                using JsonDocument doc = JsonDocument.Parse(response.Body);
+                if (doc.RootElement.TryGetProperty("full_name", out JsonElement fullNameEl))
+                {
+                    repo.FullName = fullNameEl.GetString() ?? repo.FullName;
+                }
+                if (doc.RootElement.TryGetProperty("name", out JsonElement nameEl))
+                {
+                    repo.ShortName = nameEl.GetString() ?? repo.ShortName;
+                }
             }
-            if (doc.RootElement.TryGetProperty("name", out JsonElement nameEl))
+            catch (JsonException ex)
             {
-                repo.ShortName = nameEl.GetString() ?? repo.ShortName;
+                return PollResult<IReadOnlyList<TrackedRepository>>.Fail(RepositoryStatus.NetworkError, ex.Message);
             }
         }
 
-        return new List<TrackedRepository> { repo };
+        return PollResult<IReadOnlyList<TrackedRepository>>.Ok(
+            new List<TrackedRepository> { repo },
+            response.IsNotModified,
+            response.RateLimitRemaining,
+            response.RateLimitReset);
     }
 
-    public async Task<IReadOnlyList<ActivityItem>> GetActivitiesAsync(
+    public async Task<PollResult<IReadOnlyList<ActivityItem>>> GetActivitiesAsync(
         SourceConfig source,
         TrackedRepository repository,
         CancellationToken cancellationToken = default)
@@ -65,35 +152,114 @@ public class GitHubPlatformClient : IGitPlatformClient
         LastResponses.Clear();
         List<ActivityItem> result = new();
         string baseUrl = GetBaseUrl(string.IsNullOrEmpty(repository.BaseUrl) ? source.BaseUrl : repository.BaseUrl);
+        Dictionary<string, string> headers = BuildHeaders(source);
 
         string commitsUrl = $"{baseUrl}/repos/{repository.FullName}/commits?per_page=5";
-        HttpResponseInfo commitsResp = await _httpClient.GetAsync(commitsUrl, cancellationToken);
+        HttpResponseInfo commitsResp = await _httpClient.GetAsync(commitsUrl, headers, cancellationToken);
         LastResponses.Add(commitsResp);
-        ApplyResponseMeta(repository, commitsResp);
-        if (!commitsResp.IsNotModified && commitsResp.StatusCode == HttpStatusCode.OK && !string.IsNullOrEmpty(commitsResp.Body))
+
+        if (commitsResp.StatusCode == HttpStatusCode.Conflict)
         {
-            ParseCommits(commitsResp.Body, repository, result);
+            repository.LastSyncedAt = DateTimeOffset.Now;
+            repository.Status = RepositoryStatus.Active;
+            repository.StatusMessage = null;
+        }
+        else
+        {
+            ApplyMeta(repository, commitsResp);
+            if (commitsResp.IsError)
+            {
+                return PollResult<IReadOnlyList<ActivityItem>>.Fail(
+                    repository.Status,
+                    repository.StatusMessage ?? "Commits error",
+                    commitsResp.RateLimitRemaining,
+                    commitsResp.RateLimitReset);
+            }
+
+            if (!commitsResp.IsNotModified && !string.IsNullOrEmpty(commitsResp.Body))
+            {
+                try
+                {
+                    ParseCommits(commitsResp.Body, repository, result);
+                }
+                catch (JsonException ex)
+                {
+                    return PollResult<IReadOnlyList<ActivityItem>>.Fail(RepositoryStatus.NetworkError, ex.Message);
+                }
+            }
         }
 
         string pullsUrl = $"{baseUrl}/repos/{repository.FullName}/pulls?state=all&per_page=5";
-        HttpResponseInfo pullsResp = await _httpClient.GetAsync(pullsUrl, cancellationToken);
+        HttpResponseInfo pullsResp = await _httpClient.GetAsync(pullsUrl, headers, cancellationToken);
         LastResponses.Add(pullsResp);
-        ApplyResponseMeta(repository, pullsResp);
-        if (!pullsResp.IsNotModified && pullsResp.StatusCode == HttpStatusCode.OK && !string.IsNullOrEmpty(pullsResp.Body))
+        ApplyMeta(repository, pullsResp);
+        if (pullsResp.IsError)
         {
-            ParsePullRequests(pullsResp.Body, repository, result);
+            return PollResult<IReadOnlyList<ActivityItem>>.Fail(
+                repository.Status,
+                repository.StatusMessage ?? "Pulls error",
+                pullsResp.RateLimitRemaining,
+                pullsResp.RateLimitReset);
+        }
+
+        if (!pullsResp.IsNotModified && !string.IsNullOrEmpty(pullsResp.Body))
+        {
+            try
+            {
+                ParsePullRequests(pullsResp.Body, repository, result);
+            }
+            catch (JsonException ex)
+            {
+                return PollResult<IReadOnlyList<ActivityItem>>.Fail(RepositoryStatus.NetworkError, ex.Message);
+            }
         }
 
         string issuesUrl = $"{baseUrl}/repos/{repository.FullName}/issues?state=all&per_page=5";
-        HttpResponseInfo issuesResp = await _httpClient.GetAsync(issuesUrl, cancellationToken);
+        HttpResponseInfo issuesResp = await _httpClient.GetAsync(issuesUrl, headers, cancellationToken);
         LastResponses.Add(issuesResp);
-        ApplyResponseMeta(repository, issuesResp);
-        if (!issuesResp.IsNotModified && issuesResp.StatusCode == HttpStatusCode.OK && !string.IsNullOrEmpty(issuesResp.Body))
+        ApplyMeta(repository, issuesResp);
+        if (issuesResp.IsError)
         {
-            ParseIssues(issuesResp.Body, repository, result);
+            return PollResult<IReadOnlyList<ActivityItem>>.Fail(
+                repository.Status,
+                repository.StatusMessage ?? "Issues error",
+                issuesResp.RateLimitRemaining,
+                issuesResp.RateLimitReset);
         }
 
-        return result;
+        if (!issuesResp.IsNotModified && !string.IsNullOrEmpty(issuesResp.Body))
+        {
+            try
+            {
+                ParseIssues(issuesResp.Body, repository, result);
+            }
+            catch (JsonException ex)
+            {
+                return PollResult<IReadOnlyList<ActivityItem>>.Fail(RepositoryStatus.NetworkError, ex.Message);
+            }
+        }
+
+        bool allNotModified = commitsResp.IsNotModified && pullsResp.IsNotModified && issuesResp.IsNotModified;
+        return PollResult<IReadOnlyList<ActivityItem>>.Ok(
+            result,
+            allNotModified,
+            repository.RateLimitRemaining,
+            repository.RateLimitResetAt);
+    }
+
+    private static Dictionary<string, string> BuildHeaders(SourceConfig source)
+    {
+        Dictionary<string, string> headers = new()
+        {
+            ["Accept"] = "application/vnd.github+json"
+        };
+
+        if (!string.IsNullOrWhiteSpace(source.AccessToken))
+        {
+            headers["Authorization"] = $"Bearer {source.AccessToken.Trim()}";
+        }
+
+        return headers;
     }
 
     private static void ParseCommits(string json, TrackedRepository repo, List<ActivityItem> items)
@@ -251,7 +417,7 @@ public class GitHubPlatformClient : IGitPlatformClient
         }
     }
 
-    private static void ApplyResponseMeta(TrackedRepository repo, HttpResponseInfo response)
+    private static void ApplyMeta(TrackedRepository repo, HttpResponseInfo response)
     {
         repo.LastSyncedAt = DateTimeOffset.Now;
         if (response.RateLimitRemaining.HasValue)
@@ -263,32 +429,8 @@ public class GitHubPlatformClient : IGitPlatformClient
             repo.RateLimitResetAt = response.RateLimitReset;
         }
 
-        if (response.StatusCode == HttpStatusCode.OK || response.IsNotModified)
-        {
-            repo.Status = RepositoryStatus.Active;
-            repo.StatusMessage = null;
-        }
-        else if (response.StatusCode == HttpStatusCode.Unauthorized)
-        {
-            repo.Status = RepositoryStatus.Unauthorized;
-            repo.StatusMessage = "HTTP 401 Unauthorized";
-        }
-        else if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            repo.Status = RepositoryStatus.NotFound;
-            repo.StatusMessage = "HTTP 404 Not Found";
-        }
-        else if (response.StatusCode == HttpStatusCode.TooManyRequests ||
-                 (response.StatusCode == HttpStatusCode.Forbidden && response.RateLimitRemaining == 0))
-        {
-            repo.Status = RepositoryStatus.RateLimited;
-            repo.StatusMessage = "Rate limit exceeded";
-        }
-        else
-        {
-            repo.Status = RepositoryStatus.NetworkError;
-            repo.StatusMessage = $"HTTP {(int)response.StatusCode}";
-        }
+        repo.Status = response.GetStatus();
+        repo.StatusMessage = repo.Status == RepositoryStatus.Active ? null : response.GetErrorMessage();
     }
 
     private static string GetBaseUrl(string? baseUrl)

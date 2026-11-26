@@ -18,34 +18,25 @@ SourceConfig source = new SourceConfig
     DisplayName = "Calculator"
 };
 
-IReadOnlyList<TrackedRepository> repos = await client.GetRepositoriesAsync(source);
-TrackedRepository repo = repos[0];
-
-Console.WriteLine($"Репозиторий: {repo.FullName}, статус: {repo.Status}");
-Console.WriteLine();
-
-for (int pass = 1; pass <= 2; pass++)
+PollResult<IReadOnlyList<TrackedRepository>> reposResult = await client.GetRepositoriesAsync(source);
+if (!reposResult.IsSuccess || reposResult.Data == null || reposResult.Data.Count == 0)
 {
-    Console.WriteLine($"Опрос {pass}:");
-    IReadOnlyList<ActivityItem> items = await client.GetActivitiesAsync(source, repo);
-    IReadOnlyList<ActivityItem> added = aggregator.AddRange(items);
-
-    foreach (HttpResponseInfo resp in client.LastResponses)
-    {
-        Console.WriteLine($"URL: {resp.Url}");
-        Console.WriteLine($"Status: {(int)resp.StatusCode} {resp.StatusCode}");
-        Console.WriteLine($"If-None-Match: {resp.SentETag ?? "none"}");
-        Console.WriteLine($"ETag: {resp.ReceivedETag ?? "none"}");
-        Console.WriteLine($"X-RateLimit-Remaining: {resp.RateLimitRemaining}");
-        Console.WriteLine();
-    }
-
-    Console.WriteLine($"Новых событий: {added.Count}");
-    Console.WriteLine();
+    Console.WriteLine($"Ошибка: {reposResult.Status} {reposResult.ErrorMessage}");
+    return;
 }
 
-Console.WriteLine("Последние события:");
-foreach (ActivityItem item in aggregator.GetAllSorted().Take(10))
+TrackedRepository repo = reposResult.Data[0];
+Console.WriteLine($"Репозиторий: {repo.FullName}, статус: {repo.Status}");
+
+PollResult<IReadOnlyList<ActivityItem>> activitiesResult = await client.GetActivitiesAsync(source, repo);
+if (!activitiesResult.IsSuccess || activitiesResult.Data == null)
+{
+    Console.WriteLine($"Ошибка опроса: {activitiesResult.Status} {activitiesResult.ErrorMessage}");
+    return;
+}
+
+aggregator.AddRange(activitiesResult.Data);
+foreach (ActivityItem item in aggregator.GetAllSorted().Take(5))
 {
     Console.WriteLine($"{item.Timestamp:dd.MM HH:mm} {item.Platform} {item.RepositoryShortName} {item.Type} {item.ExternalId} {item.Author}: {item.Title}");
 }
