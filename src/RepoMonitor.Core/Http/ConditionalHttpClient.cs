@@ -13,10 +13,26 @@ public class ConditionalHttpClient
         _cache = cache;
     }
 
-    public async Task<HttpResponseInfo> GetAsync(string url, CancellationToken cancellationToken = default)
+    public Task<HttpResponseInfo> GetAsync(string url, CancellationToken cancellationToken = default)
+    {
+        return GetAsync(url, null, cancellationToken);
+    }
+
+    public async Task<HttpResponseInfo> GetAsync(
+        string url,
+        Dictionary<string, string>? headers,
+        CancellationToken cancellationToken = default)
     {
         using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd("RepoMonitor");
+
+        if (headers != null)
+        {
+            foreach (KeyValuePair<string, string> pair in headers)
+            {
+                request.Headers.TryAddWithoutValidation(pair.Key, pair.Value);
+            }
+        }
 
         string? savedETag = _cache.Get(url);
         if (!string.IsNullOrEmpty(savedETag))
@@ -24,54 +40,79 @@ public class ConditionalHttpClient
             request.Headers.TryAddWithoutValidation("If-None-Match", savedETag);
         }
 
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
-
-        string? receivedETag = null;
-        if (response.Headers.TryGetValues("ETag", out IEnumerable<string>? etagValues))
+        try
         {
-            receivedETag = etagValues.FirstOrDefault();
-        }
+            using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
 
-        int? remaining = null;
-        if (response.Headers.TryGetValues("X-RateLimit-Remaining", out IEnumerable<string>? remValues))
-        {
-            if (int.TryParse(remValues.FirstOrDefault(), out int parsedRem))
+            string? receivedETag = GetHeader(response, "ETag");
+
+            int? remaining = null;
+            string? remText = GetHeader(response, "X-RateLimit-Remaining") ?? GetHeader(response, "RateLimit-Remaining");
+            if (int.TryParse(remText, out int parsedRem))
             {
                 remaining = parsedRem;
             }
-        }
 
-        DateTimeOffset? reset = null;
-        if (response.Headers.TryGetValues("X-RateLimit-Reset", out IEnumerable<string>? resetValues))
-        {
-            if (long.TryParse(resetValues.FirstOrDefault(), out long unixSeconds))
+            DateTimeOffset? reset = null;
+            string? resetText = GetHeader(response, "X-RateLimit-Reset") ?? GetHeader(response, "RateLimit-Reset");
+            if (long.TryParse(resetText, out long unixSeconds))
             {
                 reset = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).ToLocalTime();
             }
-        }
 
-        bool isNotModified = response.StatusCode == HttpStatusCode.NotModified;
-        string body = string.Empty;
+            bool isNotModified = response.StatusCode == HttpStatusCode.NotModified;
+            string body = string.Empty;
 
-        if (!isNotModified)
-        {
-            body = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (response.IsSuccessStatusCode)
+            if (!isNotModified)
             {
-                _cache.Save(url, receivedETag);
+                body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    _cache.Save(url, receivedETag);
+                }
             }
+
+            return new HttpResponseInfo
+            {
+                Url = url,
+                StatusCode = response.StatusCode,
+                IsNotModified = isNotModified,
+                Body = body,
+                SentETag = savedETag,
+                ReceivedETag = receivedETag,
+                RateLimitRemaining = remaining,
+                RateLimitReset = reset
+            };
+        }
+        catch (HttpRequestException ex)
+        {
+            return new HttpResponseInfo
+            {
+                Url = url,
+                IsNetworkError = true,
+                ErrorMessage = ex.Message,
+                SentETag = savedETag
+            };
+        }
+        catch (TaskCanceledException)
+        {
+            return new HttpResponseInfo
+            {
+                Url = url,
+                IsNetworkError = true,
+                ErrorMessage = "Request timeout or cancelled",
+                SentETag = savedETag
+            };
+        }
+    }
+
+    private static string? GetHeader(HttpResponseMessage response, string name)
+    {
+        if (response.Headers.TryGetValues(name, out IEnumerable<string>? values))
+        {
+            return values.FirstOrDefault();
         }
 
-        return new HttpResponseInfo
-        {
-            Url = url,
-            StatusCode = response.StatusCode,
-            IsNotModified = isNotModified,
-            Body = body,
-            SentETag = savedETag,
-            ReceivedETag = receivedETag,
-            RateLimitRemaining = remaining,
-            RateLimitReset = reset
-        };
+        return null;
     }
 }
